@@ -1,0 +1,243 @@
+
+* EC590 Applied Micreconometrics
+* Problem set 1
+*
+* Stata code
+* by
+* James Kelly, Asad Khan, Ding Yong Tan, Jacob Vogler
+
+version 13
+clear
+
+capture log close
+log using log_ps1, text replace
+
+***************************
+* Problem 1(a)-(f)
+***************************
+
+* Generatating Dataset 
+
+set obs 100 // number of obs for cluster
+set seed 1234 // seed for replication
+
+gen d = rnormal(0,1) // cluster-level variation, little d
+gen eta = rnormal(0,1) // more cluster-level variation
+gen D = (0<d) // indicator variable, denoted by capital D
+
+gen clusterid=_n // labeling each cluster
+expand 100 // turns each cluster obs into 100 identical obs
+sort clusterid // sorting by cluster 
+gen epsilon = rnormal(0,1) // idiosyncratic error for each individual
+gen y = D + eta + D*eta + epsilon // final term Y
+
+save data_ps1, replace // saving dataset as .dat file, replacing existing
+
+* Parts a-c : Regressions Comparing Standard Error 
+
+// standard OLS regression 
+reg y D
+estimates store model_a // saving regression results
+esttab using PS1_reg-1a.tex, se label ///
+title("a) Standard Regression")
+
+// robust standard errors
+reg y D, vce(robust)
+estimates store model_b // saving regression results
+esttab using PS1_reg-1b.tex, se label  ///
+title("b) Regression with Robust S.E.s")
+
+// clustered standard errors
+reg y D, vce(cluster clusterid)
+estimates store model_c // saving regression results
+esttab using PS1_reg-1c.tex, se label ///
+title("c) Regression with Clustered S.E.s")
+
+esttab model_a model_b model_c using reg_se.csv, replace b(5) se r2
+
+* Parts e-f
+
+collapse (mean) y D, by(clusterid) 
+
+reg y D
+estimates store model_e
+esttab using PS1_reg-1e.tex, se label ///
+title("e) Standard Cluster-level Regression")
+
+reg y D, vce(robust)
+estimates store model_f1
+esttab using PS1_reg-1f1.tex, se label ///
+title("f-i) Cluster-level Regression with Robust S.E.s")
+
+reg y D, vce(hc2)
+estimates store model_f2
+esttab using PS1_reg-1f2.tex, se label ///
+title("f-ii) Cluster-level Regression with hc2 S.E.s")
+
+reg y D, vce(hc3)
+estimates store model_f3
+esttab using PS1_reg-1f3.tex, se label ///
+title("f-iii) Cluster-level Regression with hc3 S.E.s")
+
+esttab model_e model_f1 model_f2 model_f3 using reg_collapse.csv, replace b(5) se r2
+
+
+***************************
+* Problem 1(g)-(h)
+***************************
+
+capture program drop dgp
+program dgp, rclass
+
+  drop _all
+  
+  set obs 100 // number of obs for cluster
+  
+  gen d = rnormal(0,1) // cluster-level variation, little d
+  gen eta = rnormal(0,1) // more cluster-level variation
+  gen D = (0<d) // indicator variable, denoted by capital D
+  
+  gen clusterid=_n // labeling each cluster
+  expand 100 // turns each cluster obs into 100 identical obs
+  sort clusterid // sorting by cluster 
+  gen epsilon = rnormal(0,1) // idiosyncratic error for each individual
+  gen y = D + eta + D*eta + epsilon // final term Y
+  
+  // naive microlevel regression 
+  reg y D
+  test D=1
+  return scalar reject1=r(p)<0.05
+  
+  // clustered microlevel regression
+  reg y D, vce(cluster clusterid)
+  test D=1
+  return scalar reject2=r(p)<0.05
+  
+  collapse (mean) y D, by(clusterid) 
+  
+  reg y D // naive collapsed regression
+  test D=1
+  return scalar reject3=r(p)<0.05
+  
+  reg y D, vce(robust) // robust collapsed regression
+  test D=1
+  return scalar reject4=r(p)<0.05
+  
+  reg y D, vce(hc2) // hc2 errors collapsed regression
+  test D=1
+  return scalar reject5=r(p)<0.05
+
+end
+
+********************************
+* Simulation for 1(g)-(h)
+********************************
+
+set seed 1234 // seed for replication
+
+simulate reject1=r(reject1) reject2=r(reject2) reject3=r(reject3) reject4=r(reject4) reject5=r(reject5), reps(1000): dgp
+
+summarize
+
+***************************
+* Problem 2
+***************************
+
+clear all
+set more off
+
+use "PSET1-2016.dta"
+
+drop if treat_real == .
+
+// (a) summarise variables and test difference in means between T&C groups
+sum contact treat_real vote02 persons female vote00 vote98 newreg age
+
+// run t-tests to compare means of T & C groups
+ttest persons, by(treat_real)
+ttest female, by(treat_real)
+ttest vote00, by(treat_real)
+ttest vote98, by(treat_real)
+ttest newreg, by(treat_real)
+ttest age, by(treat_real)
+ttest vote02, by(treat_real)
+
+// logit regression on treatment
+logit treat_real age female vote00 vote98 persons newreg
+
+// run F-test on control variables
+test age female vote00 vote98 persons newreg
+
+// (b)(i) - OLS of reduced form effects of treatment on voting
+reg vote02 treat_real age female vote00 vote98 persons newreg, vce(robust)
+
+// (b)(ii) - first stage of 2SLS
+// reg treatment age female vote00 vote98 persons newreg
+reg contact treat_real age female vote00 vote98 persons newreg, vce(robust)
+test treat_real age female vote00 vote98 persons newreg
+predict contact_res if e(sample), residuals
+
+// (b)(iii) - 2SLS
+ivregress 2sls vote02 age female vote00 vote98 persons newreg (contact = treat_real age female vote00 vote98 persons newreg), first
+
+// (b)(iii) - manual 2SLS
+reg vote02 contact contact_res age female vote00 vote98 persons newreg, vce(robust)
+
+// (c)
+reg vote02 contact
+reg vote02 contact age female vote00 vote98 persons newreg, vce(robust)
+
+qui gen age_con = age * contact
+qui gen female_con = female * contact
+qui gen vote00_con = vote00 * contact
+qui gen vote98_con = vote98 * contact
+qui gen persons_con = persons * contact
+qui gen newreg_con = newreg * contact
+
+reg vote02 contact age female vote00 vote98 persons newreg age_con female_con vote00_con vote98_con persons_con newreg_con, vce(robust)
+
+// (d)(i) propensity score generation
+probit contact age female vote00 vote98 persons newreg
+predict p_score
+
+// (d)(ii)
+qui kdensity p_score, saving(epen_opt, replace)
+qui kdensity p_score, bw(0.05) saving(epen, replace)
+qui kdensity p_score, k(tri) saving(tri, replace)
+graph combine epen_opt.gph epen.gph tri.gph
+graph export PS1_Q2_d2_fig1.png, replace
+twoway (kdensity p_score if contact==1) (kdensity p_score if contact==0, lpattern(dash)), legend( label( 1 "contacted") label( 2 "not contacted" ) ) xtitle("propensity score")
+graph export PS1_Q2_d2_fig2.png, replace
+
+// (d)(iii)
+gen w_att = contact + (1-contact)*(p_score/(1-p_score))
+reg vote02 contact age female vote00 vote98 persons newreg [pw=w_att]
+
+// (d)(v)
+teffects nnmatch (vote02 persons vote00 vote98 newreg age female) (contact), atet
+teffects nnmatch (vote02 p_score) (contact), atet
+
+// (d)(vi)
+// nearest neighbour
+teffects psmatch (vote02)(contact age persons newreg vote00 vote98 female, probit), nn(1) atet
+psmatch2 contact age female vote00 vote98 persons newreg, outcome(vote02) n(1)
+
+// stratification matching, by gender
+g att = .
+        egen g = group(female)
+        levels g, local(gr)
+        qui foreach j of local gr {
+                psmatch2 contact age female vote00 vote98 persons newreg if g==`j', outcome(vote02)
+                replace att = r(att) if  g==`j'
+        }
+        sum att
+
+
+// radius
+psmatch2 contact age female vote00 vote98 persons newreg, outcome(vote02) radius
+
+// kernel
+psmatch2 contact age female vote00 vote98 persons newreg, outcome(vote02) kernel
+
+log close
+
